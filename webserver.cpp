@@ -4,7 +4,7 @@ WebServer::WebServer()
 {
 
     //对客户网页处理缓存进行初始化    client的http_conn类对象首指针
-    client_http_conn = new http_conn[kFD_MAX];
+    client_http_conns_ = new http_conn[kFD_MAX];
 
     //定时器
 };
@@ -12,11 +12,11 @@ WebServer::WebServer()
 WebServer::~WebServer()
 {
 
-    close(web_epoll_fd);
-    close(web_listen_fd);
+    close(web_epoll_fd_);
+    close(web_socket_fd_);
 
     //消除client的http_conn类对象首指针
-    delete[] client_http_conn;
+    delete[] client_http_conns_;
 };
 
 // Web参数配置
@@ -32,7 +32,7 @@ void WebServer::ParameterSet(int argc, char *argv[])
         {
         case 'p':
         {
-            web_port = atoi(optarg);
+            web_port_ = atoi(optarg);
             break;
         }
         // case 'l':
@@ -47,7 +47,7 @@ void WebServer::ParameterSet(int argc, char *argv[])
         // }
         // case 'o':
         // {
-        //     so_linger_opt = atoi(optarg);
+        //     web_socket_linger_opt_ = atoi(optarg);
         //     break;
         // }
         // case 's':
@@ -81,37 +81,37 @@ void WebServer::ParameterSet(int argc, char *argv[])
 void WebServer::SocketInit()
 {
     //获取socket，设置为ipv4协议族，流数据
-    web_listen_fd = socket(PF_INET, SOCK_STREAM, 0);
-    assert(web_listen_fd >= 0);
+    web_socket_fd_ = socket(PF_INET, SOCK_STREAM, 0);
+    assert(web_socket_fd_ >= 0);
 
     //设置优雅关闭连接（优雅关闭会把还没有发送的数据发送完再关闭）
-    if (0 == so_linger_opt)
+    if (0 == web_socket_linger_opt_)
     {
         struct linger tmp = {0, 1};
-        setsockopt(web_listen_fd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+        setsockopt(web_socket_fd_, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
     }
-    else if (1 == so_linger_opt)
+    else if (1 == web_socket_linger_opt_)
     {
         struct linger tmp = {1, 1};
-        setsockopt(web_listen_fd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+        setsockopt(web_socket_fd_, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
     }
 
     //定义Ipv4协议族地址结构 该结构体内都是以网络字节顺序保存
     struct sockaddr_in address;
     bzero(&address, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(web_port);
+    address.sin_addr.s_addr = htonl(INADDR_ANY);    //INADDR_ANY为任意可用网卡地址
+    address.sin_port = htons(web_port_);
     //设置socket重用地址选项为开启,允许服务器关闭后，又能重用地址，方便服务器反复测试
     int flag = 1;
-    setsockopt(web_listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+    setsockopt(web_socket_fd_, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
 
     //绑定监听fd到网卡地址
     int ret = 0;
-    ret = bind(web_listen_fd, (struct sockaddr *)&address, sizeof(address));
+    ret = bind(web_socket_fd_, (struct sockaddr *)&address, sizeof(address));
     assert(ret >= 0);
     //将监听fd加入监听队列
-    ret = listen(web_listen_fd, 5);
+    ret = listen(web_socket_fd_, 5);
     assert(ret >= 0);
 }
 
@@ -119,12 +119,12 @@ void WebServer::SocketInit()
 void WebServer::EventLoop()
 {
     // epoll创建内核事件表
-    web_epoll_fd = epoll_create(5);
-    client_http_conn->epoll_fd=web_epoll_fd; //对用户连接的epoll_fd也进行更新
-    assert(web_epoll_fd != -1);
+    web_epoll_fd_ = epoll_create(5);
+    client_http_conns_->client_epoll_fd_=web_epoll_fd_; //对用户连接的epoll_fd也进行更新
+    assert(web_epoll_fd_ != -1);
 
     //将监听socketfd加入epoll监听事件表
-    EpollAddFd(web_epoll_fd, web_listen_fd, false, web_listen_trigger_mode);
+    EpollAddFd(web_epoll_fd_, web_socket_fd_, false, web_socket_trigger_mode_);
 
     //开始循环
     bool timeout_flag(false);
@@ -134,7 +134,7 @@ void WebServer::EventLoop()
     {
         int number=0;
 
-        number = epoll_wait(web_epoll_fd, events, kEVENT_MAX, -1);
+        number = epoll_wait(web_epoll_fd_, events_, kEVENT_MAX, -1);
 
         if (number < 0 && errno != EINTR)
         {
@@ -145,10 +145,10 @@ void WebServer::EventLoop()
 
         for (int i = 0; i < number; i++)
         {
-            int sockfd = events[i].data.fd;
+            int sockfd = events_[i].data.fd;
 
             //处理新到的客户连接，并开始监听读事件
-            if (sockfd == web_listen_fd)
+            if (sockfd == web_socket_fd_)
             {
                 //处理用户新连接
                 bool flag = HandleNewConn();
@@ -156,7 +156,7 @@ void WebServer::EventLoop()
                     continue;
             }
             //服务器端关闭连接，移除对应的定时器
-            else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
+            else if (events_[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
             }
             //处理信号
@@ -164,12 +164,12 @@ void WebServer::EventLoop()
             // {
             // }
             //处理客户连接上接收到的数据
-            else if (events[i].events & EPOLLIN)
+            else if (events_[i].events & EPOLLIN)
             {
                 HandleReadEvent(sockfd);
             }
             //处理要返回给客户连接的数据
-            else if (events[i].events & EPOLLOUT)
+            else if (events_[i].events & EPOLLOUT)
             {
                 std::cout << "检测到写事件,准备处理写事件" << std::endl;
                 HandleWriteEvent(sockfd);
@@ -188,14 +188,14 @@ void WebServer::EventLoop()
 //处理新client连接
 bool WebServer::HandleNewConn()
 {
-    struct sockaddr_in client_address;
-    socklen_t client_addrlength = sizeof(client_address);
+    struct sockaddr_in client_address_ ;
+    socklen_t client_addrlength = sizeof(client_address_ );
 
     // LT模式只需处理一个连接即可
-    if (LT_MODE == web_listen_trigger_mode)
+    if (LT_MODE == web_socket_trigger_mode_)
     {
         //获取已连接fd
-        int connfd = accept(web_listen_fd, (struct sockaddr *)&client_address, &client_addrlength);
+        int connfd = accept(web_socket_fd_, (struct sockaddr *)&client_address_ , &client_addrlength);
         if (connfd < 0)
         {
             //报错
@@ -203,7 +203,7 @@ bool WebServer::HandleNewConn()
             return false;
         }
         //判断是否超过最大用户连接数
-        if (http_conn::client_count >= kFD_MAX)
+        if (http_conn::client_counts_ >= kFD_MAX)
         {
             // utils.show_error(connfd, "Internal server busy");
             // LOG_ERROR("%s", "Internal server busy");
@@ -212,37 +212,37 @@ bool WebServer::HandleNewConn()
 
         char remote[INET_ADDRSTRLEN];
         printf("connected with ip: %s and port: %d\n", inet_ntop(AF_INET,
-                    &client_address.sin_addr, remote, INET_ADDRSTRLEN), ntohs(client_address.sin_port));
+                    &client_address_ .sin_addr, remote, INET_ADDRSTRLEN), ntohs(client_address_ .sin_port));
 
 
 
         //将已连接client对应的http初始化,开始监听读事件
-        client_http_conn[connfd].Init(connfd, client_address, client_sockfd_trigger_mode);
+        client_http_conns_[connfd].Init(connfd, client_address_ , client_socket_trigger_mode_);
 
 
 
         std::cout << "已处理完新连接,已注册新连接的EPOLLIN事件" << std::endl;
 
-        // client_http_conn[connfd].HttpProcess();
+        // client_http_conns_[connfd].HttpProcess();
 
         // std::cout << "发送完响应消息" << std::endl;
 
         //创建已连接client的定时器
-        // timer(connfd, client_address);
+        // timer(connfd, client_address_ );
     }
     // ET模式必须读完所有连接，否则状态会被清空
     else
     {
         while (1)
         {
-            int connfd = accept(web_listen_fd, (struct sockaddr *)&client_address, &client_addrlength);
+            int connfd = accept(web_socket_fd_, (struct sockaddr *)&client_address_ , &client_addrlength);
             if (connfd < 0)
             {
                 // LOG_ERROR("%s:errno is:%d", "accept error", errno);
                 break;
             }
 
-            if (http_conn::client_count >= kFD_MAX)
+            if (http_conn::client_counts_ >= kFD_MAX)
             {
                 // utils.show_error(connfd, "Internal server busy");
                 // LOG_ERROR("%s", "Internal server busy");
@@ -250,10 +250,10 @@ bool WebServer::HandleNewConn()
             }
 
             //将已连接client对应的http初始化,开始监听读事件
-            client_http_conn[connfd].Init(connfd, client_address, client_sockfd_trigger_mode);
+            client_http_conns_[connfd].Init(connfd, client_address_ , client_socket_trigger_mode_);
 
             //创建已连接client的定时器
-            // timer(connfd, client_address);
+            // timer(connfd, client_address_ );
         }
         return false;
     }
@@ -283,15 +283,15 @@ void WebServer::HandleReadEvent(int sockfd)
         while (true)
         {
             //线程池完成读事件
-            if (1 == client_http_conn[sockfd].improv)
+            if (1 == client_http_conns_[sockfd].improv_  )
             {
                 //处理连接超时
-                // if (1 == client_http_conn[sockfd].timer_flag)
+                // if (1 == client_http_conns_[sockfd].timer_flag_)
                 // {
                 //     deal_timer(timer, sockfd);
-                //     client_http_conn[sockfd].timer_flag = 0;
+                //     client_http_conns_[sockfd].timer_flag_ = 0;
                 // }
-                client_http_conn[sockfd].improv = 0;
+                client_http_conns_[sockfd].improv_   = 0;
                 break;
             }
         }
@@ -302,7 +302,7 @@ void WebServer::HandleReadEvent(int sockfd)
         std::cout << "当前为Reactor模式,开始处理读事件" << std::endl;
 
         // proactor模式，主线程直接进行读取操作
-        if (client_http_conn[sockfd].ReadOnce())
+        if (client_http_conns_[sockfd].ReadOnce())
         {
             // LOG_INFO("deal with the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
 
@@ -313,7 +313,7 @@ void WebServer::HandleReadEvent(int sockfd)
             std::cout << "读完数据，开始进行处理，并注册返回消息事件" << std::endl;
 
             //测试程序
-            client_http_conn[sockfd].HttpProcess();
+            client_http_conns_[sockfd].HttpProcess();
 
             //因为当前在读取该sockd文件要花费时间，所以延时该sockfd的到期时间
             // if (timer)
@@ -352,15 +352,15 @@ void WebServer::HandleWriteEvent(int sockfd)
         while (true)
         {
             //等线程池完成写事件。
-            if (1 == client_http_conn[sockfd].improv)
+            if (1 == client_http_conns_[sockfd].improv_  )
             {
                 //处理连接超时
-                // if (1 == client_http_conn[sockfd].timer_flag)
+                // if (1 == client_http_conns_[sockfd].timer_flag_)
                 // {
                 //     deal_timer(timer, sockfd);
-                //     client_http_conn[sockfd].timer_flag = 0;
+                //     client_http_conns_[sockfd].timer_flag_ = 0;
                 // }
-                client_http_conn[sockfd].improv = 0;
+                client_http_conns_[sockfd].improv_   = 0;
                 break;
             }
         }
@@ -368,7 +368,7 @@ void WebServer::HandleWriteEvent(int sockfd)
     else
     {
         // proactor模式，主线程直接进行写操作
-        if (client_http_conn[sockfd].Write())
+        if (client_http_conns_[sockfd].Write())
         {
             // LOG_INFO("send data to the client(%s)", inet_ntoa(users[sockfd].get_address()->sin_addr));
 

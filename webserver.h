@@ -62,20 +62,20 @@ public:
 
 public:
     //主机监听socket基本配置参数
-    int web_port = 9006;                            //主机端口号 default=9006
-    int web_listen_fd;                              //主机socket监听fd
-    TriggerMode web_listen_trigger_mode = LT_MODE; //web主机socket监听fd模式
-    bool so_linger_opt = 0;                          //优雅关闭socket选项 不启用为0 启用为1 default=0
+    int web_port_ = 9006;                            //主机端口号 default=9006
+    int web_socket_fd_;                              //主机socket监听fd
+    TriggerMode web_socket_trigger_mode_ = LT_MODE; //web主机socket监听fd模式
+    bool web_socket_linger_opt_ = 0;                          //优雅关闭socket选项 不启用为0 启用为1 default=0
 
     //已连接用户socket配置参数
-    TriggerMode client_sockfd_trigger_mode = LT_MODE; //已连接客户端socket监听fd模式
+    TriggerMode client_socket_trigger_mode_ = LT_MODE; //已连接客户端socket监听fd模式
 
     //epoll监听
-    int web_epoll_fd; //指向内核监听事件表的fd
-    epoll_event events[kEVENT_MAX]; //用于获取和写入事件表结构体
+    int web_epoll_fd_; //指向内核监听事件表的fd
+    epoll_event events_[kEVENT_MAX]; //用于获取和写入事件表结构体
 
     //client的http_conn类对象首指针
-    http_conn* client_http_conn;
+    http_conn* client_http_conns_;
 
     //线程池模式
     concurrency_model web_concurrency_model=PROACTOR_MODEL;  //默认proactor模式，让主线程处理读写

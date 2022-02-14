@@ -1,13 +1,13 @@
 #include "epoll_function.h"
 
 //EpollAddFd 添加文件描述符到事件表函数
-void EpollAddFd(int epollfd, int fd, bool one_shot_opt, TriggerMode trigger_mode)
+void EpollAddFd(int epollfd, int fd, bool one_shot_opt, TriggerMode http_socket_trigger_mode_)
 {
 
     epoll_event event;
     event.data.fd = fd;
 
-    if (ET_MODE == trigger_mode)
+    if (ET_MODE == http_socket_trigger_mode_)
         event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
     else
         event.events = EPOLLIN | EPOLLRDHUP;
