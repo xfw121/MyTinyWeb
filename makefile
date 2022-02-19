@@ -10,8 +10,11 @@ endif
 
 server: main.cpp  webserver.cpp 	\
 		./epoll/epoll_function.cpp 	\
-		./http/http_conn.cpp		
-	$(CXX) -o server  $^ $(CXXFLAGS) 
+		./cgi_mysql/sql_connection_pool.cpp \
+		./http/http_conn.cpp				\
+		./lock/locker.h		\
+		./threadpool/threadpool.h
+	$(CXX) -o server  $^ $(CXXFLAGS) -lpthread -lmysqlclient
 	
 clean:
 	rm  -r server

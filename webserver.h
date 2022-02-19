@@ -41,13 +41,17 @@ public:
     void ParameterSet(int argc, char *argv[]);
 
 
+    //日志初始化
+    void Log_Init();
+
     //监听socket初始化,并开始监听
     void SocketInit();
 
     // 定时器初始化，并启动定时器
-    void ListTimerInit()
-    {
-    };
+    void ListTimerInit();
+
+    void ThreadPoolInit();
+
 
     //主线程（将监听socketfd加入epoll监听事件表，并开始循环处理事件）
     void EventLoop();
@@ -62,24 +66,36 @@ public:
 
 public:
     //主机监听socket基本配置参数
-    int web_port_ = 9006;                            //主机端口号 default=9006
-    int web_socket_fd_;                              //主机socket监听fd
+    int web_port_ = 9006;                           //主机端口号 default=9006
+    int web_socket_fd_;                             //主机socket监听fd
     TriggerMode web_socket_trigger_mode_ = LT_MODE; //web主机socket监听fd模式
-    bool web_socket_linger_opt_ = 0;                          //优雅关闭socket选项 不启用为0 启用为1 default=0
+    bool web_socket_linger_opt_ = 0;                //优雅关闭socket选项 不启用为0 启用为1 default=0
 
     //已连接用户socket配置参数
     TriggerMode client_socket_trigger_mode_ = LT_MODE; //已连接客户端socket监听fd模式
 
     //epoll监听
-    int web_epoll_fd_; //指向内核监听事件表的fd
+    int epoll_fd_;                   //指向内核监听事件表的fd
     epoll_event events_[kEVENT_MAX]; //用于获取和写入事件表结构体
 
-    //client的http_conn类对象首指针
-    http_conn* client_http_conns_;
+    //日志
+    int log_mode_=0;      //0同步/异步
+    int log_switch_=0;    //日志开关 默认0关闭
 
-    //线程池模式
-    concurrency_model web_concurrency_model=PROACTOR_MODEL;  //默认proactor模式，让主线程处理读写
+    //用户http_conn相关
+    HttpConn* http_conns_; //用户缓存数组指针
 
+    //线程池相关
+    ConcurrencyModel concurrency_model_=REACTOR_MODEL;  //默认reactor模式，让工作线程处理读写
+    int threadpool_max_=8;                                //最大线程数目8
+    ThreadPool<HttpConn> *thread_pool_;                 //线程连接池
+
+    //数据库相关
+    connection_pool *mysql_pool_;   //数据库连接池指针，主要是传递给线程池使用
+    string sql_user_="root";               //登陆数据库用户名
+    string sql_password_="root";           //登陆数据库密码
+    string database_name_="cgi";          //使用数据库名
+    int sql_max_=8;                   //sql连接池最大数目
 
 };
 

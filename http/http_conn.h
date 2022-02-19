@@ -1,127 +1,171 @@
 #ifndef HTTP_CONN_H
 #define HTTP_CONN_H
 
-//c库文件
+// c库文件
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h> //va_start和va_end使用
+#include <sys/stat.h> //用于stat文件状态结构体使用
+#include <sys/mman.h> //用于mmap和ummap函数使用
 
-//c++标准库
+// c++标准库
 #include <string>
+#include <map>
+
 using std::string;
 
 //其他库
-#include <sys/epoll.h>  //linux的epoll库
-#include <unistd.h>     //包含大量unix系统调用接口
-#include <sys/socket.h> //socket主要库
-#include <netinet/in.h> //定义数据结构sockaddr_in
-#include <errno.h>      //包含了errno宏
+#include <sys/epoll.h>   //linux的epoll库
+#include <unistd.h>      //包含大量unix系统调用接口
+#include <sys/socket.h>  //socket主要库
+#include <netinet/in.h>  //定义数据结构sockaddr_in
+#include <errno.h>       //包含了errno宏
+#include <mysql/mysql.h> //数据库操作api
 
 //本项目内.h文件
 #include "../epoll/epoll_function.h"
+#include "../cgi_mysql/sql_connection_pool.h"
 
-class http_conn
+class HttpConn
 {
 
 public:
-    //静态成员
-    static const int kREAD_BUFFER_SIZE = 2048;  //读缓存大小
-    static const int kWRITE_BUFFER_SIZE = 1024; //写缓存大小
-    static int client_epoll_fd_;                        //事件表描述符，由主线获得
-    static int client_counts_;                    //当前用户数量
-
-    //Http状态
-    enum HttpCode
+    // http相关类型
+    enum HttpStatus // Http响应状态
     {
-        NO_REQUEST,
-        GET_REQUEST,
-        BAD_REQUEST,
-        NO_RESOURCE,
-        FORBIDDEN_REQUEST,
-        FILE_REQUEST,
-        INTERNAL_ERROR,
-        CLOSED_CONNECTION
+        NO_REQUEST,        //请求不完整，需要继续读取请求报文数据
+        GET_REQUEST,       //获得了完整的HTTP请求
+        BAD_REQUEST,       // HTTP请求报文有语法错误或请求资源为目录
+        NO_RESOURCE,       //请求资源不存在
+        FORBIDDEN_REQUEST, //请求资源禁止访问，没有读取权限
+        FILE_REQUEST,      //请求资源可以正常访问
+        INTERNAL_ERROR,    //服务器内部错误，该结果在主状态机逻辑switch的default下，一般不会触发
+        CLOSED_CONNECTION  
+    };
+    //构造函数和析构函数
+    HttpConn() {}
+    ~HttpConn() {}
+    //对外封装的基本操作（初始化，处理http请求，关闭连接等操作）
+    void Init(int client_sockfd_t, const sockaddr_in &client_address_t); //初始化函数
+    void HttpProcess();                                                  // http处理用户请求函数
+    bool ReadOnce();                                                     //读取内核接收缓存到http缓存处
+    bool Write();                                                        //写入http缓存到内核发送缓存
+    void CloseConn(bool close_opt);                                      //关闭该已连接用户
+    sockaddr_in *GetAddress()                                            //获取地址，日志要用
+    {
+        return &address_;
+    }
+    void MysqlResultInit(connection_pool *connPool); //先把已存储用户和密码预读取出来到map中
+
+    //对外的接口变量
+    static int epoll_fd_;                    //事件表描述符，由主线程获得
+    static int client_counts_;               //当前用户数量，主线程判断文件描述符是否足够
+    static TriggerMode socket_trigger_mode_; //触发模式，主线程设置
+    static char *root_path_;       //根目录路径 主线程设置
+    static int log_switch_;        //日志开关 主线程设置
+    int completed_flag_;                     //用于reactor模式下，提示主线程，已经完成http缓存的读取/写入
+    int timerout_flag_;                      //工作线程处理连接超时标志 告诉主线程处理连接
+    int http_state_;                         // http读写状态 0读 1写 告诉工作线程
+
+private:
+    // http相关类型
+    enum HttpMethod // http请求方法
+    {
+        GET = 0,
+        POST,
+        HEAD,
+        PUT,
+        DELETE,
+        TRACE,
+        OPTIONS,
+        CONNECT,
+        PATH
+    };
+    enum CheckState //当前http处理阶段
+    {
+        CHECK_STATE_REQUESTLINE = 0, //请求行阶段
+        CHECK_STATE_HEADER,          //消息头阶段
+        CHECK_STATE_CONTENT          //消息体阶段
+    };
+    enum LineStatus //行处理状态
+    {
+        LINE_OK = 0, //完整读取一行
+        LINE_BAD,    //报文语法有误
+        LINE_OPEN    //读取的行不完整
     };
 
-public:
-    http_conn() {}
-    ~http_conn() {}
+    //静态成员 只有static const声明的整型成员能在类内部初始化，并且初始化值必须是常量表达式
+    static const int kREAD_BUFFER_SIZE = 2048;  //读缓存大小
+    static const int kWRITE_BUFFER_SIZE = 1024; //写缓存大小
+    static const int kFILENAME_LEN = 200;       //文件名长度
 
-public:
-    //对外封装的基本操作（初始化，读取http请求，处理http请求，写http请求，）
-    //初始化函数
-    void Init(int client_sockfd_t, const sockaddr_in &client_address_t , TriggerMode trigger_mode_t);
-    void HttpProcess();             //http处理用户请求函数
-    bool ReadOnce();                //读取内核接收缓存到http缓存处
-    bool Write();                   //写入http缓存到内核发送缓存
-    void CloseConn(bool close_opt); //关闭该已连接用户
+    //处理http过程函数
+    void HttpClear();                  //清空http读写缓存及状态
+    HttpStatus ProcessRead();          //读取http内容，处理请求//读取http内容，处理请求（主状态机）
+    bool ProcessWrite(HttpStatus ret); //依据回应状态，将http内容写入缓存，确定要写的内容大小
 
-private:
-    //用户网络信息
-    int client_sockfd_;          //用户已连接sockfd
-    sockaddr_in client_address_ ; //网络地址
-    TriggerMode http_socket_trigger_mode_;   //触发模式
-    bool http_socket_linger_opt_;             //长连接选项
-
-    //读缓存
-    char read_buffers_[kREAD_BUFFER_SIZE]; //读数组
-    int read_index_;                      //读索引，记录已读数据数
-
-    //写缓存
-    char write_buffers_[kWRITE_BUFFER_SIZE]; //写数组
-    int write_index_;                       //写索引，记录已写数据（不含文件）
-
-    
-    struct iovec m_iv_[2]; //用于写非连续内存结构体
-    int m_iv_count_;       //非连续内存个数
-
-    char *file_address_; //文件缓存地址
-
-    int all_bytes_have_send_; //所有已写数据（包含文件）
-    int all_bytes_to_send_;   //所有待写数据（包含文件）
-
-public:
-    //用于reactor模式下，提示主线程，已经完成http缓存的读取/写入
-    int improv_  ;
-
-public:
-    //http读写状态
-    enum
+    //处理http请求过程状态机子函数
+    LineStatus parse_line(); //从状态机 读取一行并把控读取行状态         
+    char *GetLine() //获取当前准备处理行
     {
-        write_state,
-        read_state,
-    } http_state_;
+        return read_buffers_ + start_line_;
+    };     
+    HttpStatus ParseRequestLine(char *text);//解析请求行
+    HttpStatus ParseHeaders(char *text); //解析头信息     
+    HttpStatus ParseContent(char *text);//解析消息体
+         
+    //处理http请求文件过程函数
+    HttpStatus DoRequest(); //处理好登录和注册等逻辑，如果需要返回文件，把待发送相关文件大小按照写缓存参数写好
+    void Unmap();  //解除文件映射
 
-private:
-    //Http初始化
-    void HttpInit();
-
-    //处理GET请求
-    HttpCode DoRequest();
-    //读取http内容，处理请求
-    HttpCode HttpRead();
-    //将http内容写入缓存，确定要写的内容大小
-    bool HttpWrite(HttpCode ret);
-
-
-    //http内容处理函数
-    bool AddResponse(const char *format, ...);
-
-    //http行内容编写函数
-    //状态行编写
-    bool AddStatusLine(int status, const char *title);//状态行
-    
-    bool AddHeaders(int content_len);        //添加头
-
-    bool AddContent(const char *content);    //添加内容
+    // http内容处理函数
+    bool AddResponse(const char *format, ...);         //格式化写入缓存（以下都是调用该函数完成读写）
+    bool AddStatusLine(int status, const char *title); //状态行编写
+    bool AddHeaders(int content_len);                  //添加消息头
+    bool AddContent(const char *content);              //添加消息体
 
     //添加头的子函数
-    bool AddContentLength(int content_len);  //添加内容长度
+    bool AddContentLength(int content_len); //添加内容长度
+    bool AddLingerOpt();                    //添加长连接linger选项
+    bool AddBlankLine();                    //添加空白行
 
-    bool AddLinger();    //添加长连接linger选项
+    //用户网络信息
+    int sockfd_;             //用户已连接sockfd
+    sockaddr_in address_;    //网络地址
+    bool socket_linger_opt_; //长连接选项
 
-    bool AddBlankLine(); //添加空白行
+    // http读缓存
+    char read_buffers_[kREAD_BUFFER_SIZE]; //读数组
+    int read_index_;                       //读索引，记录已读数据数
+    int checked_idx_;                      //当前已处理http字节数
+    int start_line_;                       //下一处理行首字节
 
+    // http写缓存
+    char write_buffers_[kWRITE_BUFFER_SIZE]; //写数组
+    int write_index_;                        //写索引，记录已写数据（不含文件）
+    struct iovec m_iv_[2];                   //用于写非连续内存结构体
+    int iv_count_;                           //非连续内存个数
+    int all_bytes_have_send_;                //所有已写数据（包含文件）
+    int all_bytes_to_send_;                  //所有待写数据（包含文件）
+
+    //文件映射相关
+    char *file_address_;     //真实文件映射缓存地址
+    struct stat file_stat_; //文件状态结构体
+    char real_file[kFILENAME_LEN]; //真实文件地址
+
+
+    // http信息相关变量
+    CheckState check_state_; //当前http处理阶段
+    HttpMethod method_ ;     //当前http处理方法
+    char *url_;              //目标url
+    char *version_;          // http版本号
+    char *host_;             //主机信息
+    int content_length_;     //请求消息体长度
+    int cgi_;                //用户提交post标志
+    char *heard_string_;     //请求头信息
+
+    //数据库相关
+    MYSQL *mysql_; //数据库连接
 };
 
 #endif
