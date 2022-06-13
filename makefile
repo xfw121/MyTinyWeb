@@ -9,11 +9,12 @@ else
 endif
 
 server: main.cpp  webserver.cpp 	\
-		./epoll/epoll_function.cpp 	\
+		./util/util.cpp 	\
 		./cgi_mysql/sql_connection_pool.cpp \
 		./http/http_conn.cpp				\
 		./lock/locker.h		\
-		./threadpool/threadpool.h
+		./threadpool/threadpool.h \
+		./timer/list_timer.cpp
 	$(CXX) -o server  $^ $(CXXFLAGS) -lpthread -lmysqlclient
 	
 clean:

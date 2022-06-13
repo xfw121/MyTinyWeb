@@ -12,48 +12,39 @@
 
 using namespace std;
 
-class connection_pool
+//数据库连接池
+class ConnectionPool
 {
 public:
 	MYSQL *GetConnection();				 //获取数据库连接
 	bool ReleaseConnection(MYSQL *conn); //释放连接
-	int GetFreeConn();					 //获取连接
 	void DestroyPool();					 //销毁所有连接
 
-	//单例模式
-	static connection_pool *GetInstance();
+	//单例模式（连接池对象作为函数的静态局部变量）
+	static ConnectionPool *GetInstance();
 
-	void init(string url, string User, string PassWord, string DataBaseName, int Port, int MaxConn, int close_log); 
+	//对线程池的初始化
+	void Init(string url, string User, string PassWord, string DataBaseName, int Port, int MaxConn); 
 
 private:
-	connection_pool();
-	~connection_pool();
-
-	int m_MaxConn;  //最大连接数
-	int m_CurConn;  //当前已使用的连接数
-	int m_FreeConn; //当前空闲的连接数
-	Locker lock;
+	ConnectionPool();
+	~ConnectionPool();
+	Locker lock;    //保障对连接池的修改
 	list<MYSQL *> connList; //连接池
-	Sem reserve;
+	Sem reserve;            //指示连接池可用连接数量
 
-public:
-	string m_url;			 //主机地址
-	string m_Port;		 //数据库端口号
-	string m_User;		 //登陆数据库用户名
-	string m_PassWord;	 //登陆数据库密码
-	string m_DatabaseName; //使用数据库名
-	int m_close_log;	//日志开关
 };
 
-class connectionRAII{
+//RAII机制获取连接类
+class ConnectionRAII{
 
 public:
-	connectionRAII(MYSQL **con, connection_pool *connPool);
-	~connectionRAII();
+	ConnectionRAII(MYSQL **con, ConnectionPool *connPool);
+	~ConnectionRAII();
 	
 private:
-	MYSQL *conRAII;
-	connection_pool *poolRAII;
+	MYSQL *conRAII;           	//要释放的数据库连接
+	ConnectionPool *poolRAII;	//要释放的数据库连接所在的连接池
 };
 
 #endif

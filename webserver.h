@@ -19,14 +19,15 @@
 
 
 //本项目内.h文件
-#include "./epoll/epoll_function.h"
+#include "./util/util.h"
 #include "./http/http_conn.h"
 #include "./threadpool/threadpool.h"
+#include "./timer/list_timer.h"
 
 
 const int kEVENT_MAX = 10000; //最大监听事件数
 const int kFD_MAX = 65536;           //最大文件描述符
-const int kTIMESLOT = 5;             //最小超时单位
+const int kTIMESLOT = 5;             //最小超时单位（以秒为单位）
 
 
 //服务器类
@@ -40,17 +41,17 @@ public:
     //Web参数配置
     void ParameterSet(int argc, char *argv[]);
 
-
-    //日志初始化
-    void Log_Init();
-
     //监听socket初始化,并开始监听
     void SocketInit();
 
     // 定时器初始化，并启动定时器
     void ListTimerInit();
 
-    void ThreadPoolInit();
+    //线程池初始化
+    void ThreadPoolInit(); 
+
+    //数据库连接池初始化
+    void SqlPoolInit();
 
 
     //主线程（将监听socketfd加入epoll监听事件表，并开始循环处理事件）
@@ -63,13 +64,23 @@ public:
     //写事件，用户请求处理完了，并写入了缓存区，等待写入用户socket
     void HandleWriteEvent(int sockfd);
 
+    //添加连接到定时器
+    void AddTimer(int connfd, struct sockaddr_in client_address);
+
+    //延时定时器
+    void DelayTimer(Timer *timer);
+    //删除定时器
+    void DelTimer(Timer *timer, int sockfd);
+    //处理管道来的定时信号
+    bool DealWithSigna(bool &timeout, bool &stop_server);
+
 
 public:
     //主机监听socket基本配置参数
     int web_port_ = 9006;                           //主机端口号 default=9006
     int web_socket_fd_;                             //主机socket监听fd
     TriggerMode web_socket_trigger_mode_ = LT_MODE; //web主机socket监听fd模式
-    bool web_socket_linger_opt_ = 0;                //优雅关闭socket选项 不启用为0 启用为1 default=0
+    bool web_socket_linger_opt_ = 0;                //优雅关闭socket选项会把还没有发送的数据发送完再  （关闭不启用为0 启用为1 default=0）
 
     //已连接用户socket配置参数
     TriggerMode client_socket_trigger_mode_ = LT_MODE; //已连接客户端socket监听fd模式
@@ -78,11 +89,8 @@ public:
     int epoll_fd_;                   //指向内核监听事件表的fd
     epoll_event events_[kEVENT_MAX]; //用于获取和写入事件表结构体
 
-    //日志
-    int log_mode_=0;      //0同步/异步
-    int log_switch_=0;    //日志开关 默认0关闭
-
     //用户http_conn相关
+    char root[6] = "/root"; //http根目录
     HttpConn* http_conns_; //用户缓存数组指针
 
     //线程池相关
@@ -91,11 +99,17 @@ public:
     ThreadPool<HttpConn> *thread_pool_;                 //线程连接池
 
     //数据库相关
-    connection_pool *mysql_pool_;   //数据库连接池指针，主要是传递给线程池使用
+    ConnectionPool *mysql_pool_;   //数据库连接池指针，线程从中获取数据库连接
     string sql_user_="root";               //登陆数据库用户名
     string sql_password_="root";           //登陆数据库密码
     string database_name_="cgi";          //使用数据库名
     int sql_max_=8;                   //sql连接池最大数目
+
+    //定时器相关
+    ClientResource* client_resource_;    //用户资源指针（与定时器链表中的定时器是相互绑定的）（因此两个可用互相访问）
+    SortTimerList timer_list_;           //定时器链表
+    int pipefd_[2];                     //用来同一事件管理（信号）
+                                        //其中pipefd_[0]为主线程  pipefd_[1]为定时中断函数的
 
 };
 

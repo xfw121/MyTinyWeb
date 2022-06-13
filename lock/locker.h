@@ -6,9 +6,9 @@
 //c++标准库
 #include <list>
 //其他库
-#include <pthread.h>
-#include <exception>
-#include <semaphore.h>
+#include <pthread.h>    //线程
+#include <exception>     //异常
+#include <semaphore.h>  //信号量
 //本项目内.h文件
 
 

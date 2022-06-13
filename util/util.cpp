@@ -1,4 +1,4 @@
-#include "epoll_function.h"
+#include "util.h"
 
 //EpollAddFd 添加文件描述符到事件表函数
 void EpollAddFd(int epollfd, int fd, bool one_shot_opt, TriggerMode TRIGMode)
@@ -48,3 +48,24 @@ void EpollRemoveFd(int epollfd, int fd)
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
     close(fd);
 }
+
+
+//设置信号函数（restart缺省值为true，在函数声明中）
+void Addsig(int sig, void(handler)(int), bool restart) {
+
+    struct sigaction sa;
+    memset(&sa, '\0', sizeof(sa));
+    sa.sa_handler = handler;
+    if (restart)
+        sa.sa_flags |= SA_RESTART;
+    sigfillset(&sa.sa_mask);
+    assert(sigaction(sig, &sa, NULL) != -1);
+
+};
+
+
+//关闭socket连接，向用户发送错误信息
+void ShowError(int connfd, const char *info) {
+    send(connfd, info, strlen(info), 0);
+    close(connfd);
+};

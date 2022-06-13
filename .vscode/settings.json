@@ -4,6 +4,8 @@
         "list": "cpp",
         "exception": "cpp",
         "*.tcc": "cpp",
-        "string": "cpp"
+        "string": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp"
     }
 }
